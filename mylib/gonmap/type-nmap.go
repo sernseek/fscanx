@@ -72,7 +72,11 @@ func (n *Nmap) ScanTimeout(ip string, port int, timeout time.Duration, single_pr
 		conn, _ := common.GetConn("tcp", netloc, single_probe_timeout)
 		if conn != nil {
 			defer conn.Close()
-			return Open, nil
+			if common.IsValidSocks5 == false {
+				return Closed, nil
+			} else {
+				return Open, nil
+			}
 		}
 		return Closed, nil
 	case <-resChan:

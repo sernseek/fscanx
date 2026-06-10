@@ -105,10 +105,6 @@ func GetNbnsname(info *common.HostInfo) (netbios NetBiosInfo, err error) {
 		return
 	}
 
-	//conn, err := net.DialTimeout("udp", realhost, time.Duration(common.TcpTimeout)*time.Second)
-	//if err != nil {
-	//	return
-	//}
 	defer conn.Close()
 	err = conn.SetDeadline(time.Now().Add(time.Duration(common.TcpTimeout) * time.Second))
 	if err != nil {
@@ -120,12 +116,7 @@ func GetNbnsname(info *common.HostInfo) (netbios NetBiosInfo, err error) {
 	}
 	//fmt.Println("[debug] reading")
 	text, _ := ReadBytes(conn)
-	//fmt.Println("[debug] read:", text)
-	if common.Socks5Proxy == "" {
-		netbios, err = ParseNetBios(text)
-	} else {
-		netbios, err = ParseNetBios(text[10:])
-	}
+	netbios, err = ParseNetBios(text)
 	return
 }
 
