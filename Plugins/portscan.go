@@ -474,7 +474,7 @@ func DoPortScan(ip string, port int, wg *sync.WaitGroup) {
 		default:
 			isProbeOK := false
 			// 如果使用了 -nmap选项， 则端口探测后会识别到协议，可根据协议来启用对应插件进行深度利用
-			if common.UseNmap {
+			if common.UseNmap && protocol != "tcp" {
 				if PluginListByProto[protocol] != nil {
 					CallScanTaskByProtocolAsync(protocol, &targetInfo, wg)
 					isProbeOK = true
@@ -598,11 +598,11 @@ func PortProbeSingleOnStd(addr *Addr) {
 	default:
 		wg := sync.WaitGroup{}
 		isProbeOK := false
-		if PluginListByProto[protocol] != nil {
-			CallScanTaskByProtocolAsync(protocol, res, &wg)
-			isProbeOK = true
-		} else {
-			CallScanTaskByProtocolAsync("http", res, &wg)
+		if protocol != "tcp" {
+			if PluginListByProto[protocol] != nil {
+				CallScanTaskByProtocolAsync(protocol, res, &wg)
+				isProbeOK = true
+			}
 		}
 		if isProbeOK == false {
 			if IsContain(common.PortsHasPlugin, res.Ports) { // 如果要探测的目标端口在本程序中有专用的探测方法，则使用专用探测方法(如445、21、3389、135等)。否则走入default使用http尝试探测
