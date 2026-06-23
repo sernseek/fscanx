@@ -413,6 +413,9 @@ func DoPortScan(ip string, port int, wg *sync.WaitGroup) {
 		case gonmap.Closed:
 			//fmt.Println("port ", port, "close")
 		case gonmap.Open:
+			if common.Socks5Proxy != "" {
+				return
+			}
 			isOpen = true
 			protocol = "tcp"
 		case gonmap.NotMatched:
@@ -424,6 +427,9 @@ func DoPortScan(ip string, port int, wg *sync.WaitGroup) {
 			isOpen = true
 			protocol = response.FingerPrint.Service
 		case gonmap.Unknown:
+			if common.Socks5Proxy != "" {
+				return
+			}
 			isOpen = true
 			protocol = "tcp"
 		}
@@ -534,12 +540,18 @@ func PortProbeSingleOnStd(addr *Addr) {
 		case gonmap.Closed:
 			return
 		case gonmap.Open:
+			if common.Socks5Proxy != "" {
+				return
+			}
 		case gonmap.NotMatched:
 		case gonmap.Matched:
 			if response != nil {
 				protocol = response.FingerPrint.Service
 			}
 		case gonmap.Unknown:
+			if common.Socks5Proxy != "" {
+				return
+			}
 		}
 	} else {
 		// 未开启-nmap选项，这里直接做端口存活探测，仅仅尝试tcp连接
