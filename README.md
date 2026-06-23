@@ -5,7 +5,8 @@
 修改内容：
 
 * 在 `-socks5` 与 `-nmap` 同时启用时，`gonmap.Open` 和 `gonmap.Unknown` 不再直接作为开放端口输出。
-* 只有 `gonmap.Matched` 或 `gonmap.NotMatched` 这类已经读取到目标响应内容的状态才继续输出。
+* `gonmap.Matched` 或 `gonmap.NotMatched` 这类已经读取到目标响应内容的状态会继续输出。
+* `gonmap.Open` 或 `gonmap.Unknown` 会触发二次响应验证，尝试读取 banner 或发送 HTTP、Redis、MSSQL 等轻量探针；只有读到任意应用层回包才继续输出。
 * 当 `-nmap` 只得到 `tcp` 这类未识别协议时，不再直接按 `tcp` 走 Web 探测，而是继续回退到端口默认插件，例如 `3306/tcp` 会触发 MySQL 插件。
 * 该行为会过滤掉 aTrust、Clash、部分隧道代理等场景下仅 TCP connect 成功但无应用层回包的黑洞目标。
 * 普通 connect 扫描仍然可能误报，因此这类链路必须使用 `-nmap`。

@@ -13,9 +13,53 @@ import (
 	"github.com/killmonday/fscanx/mylib/gonmap"
 )
 
+var strictSocksProbePayloads = [][]byte{
+	[]byte("GET / HTTP/1.0\r\n\r\n"),
+	[]byte("*1\r\n$4\r\nPING\r\n"),
+	[]byte{0x12, 0x01, 0x00, 0x2f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1a, 0x00, 0x06, 0x01, 0x00, 0x20, 0x00, 0x01, 0x02, 0x00, 0x21, 0x00, 0x01, 0x03, 0x00, 0x22, 0x00, 0x04, 0x04, 0x00, 0x26, 0x00, 0x01, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+}
+
 type Addr struct {
 	ip   string
 	port int
+}
+
+func hasStrictSocksResponse(host string, port int, timeout time.Duration) bool {
+	address := fmt.Sprintf("%s:%d", host, port)
+	readTimeout := timeout
+	if readTimeout > 2*time.Second {
+		readTimeout = 2 * time.Second
+	}
+	tryRead := func(conn net.Conn) bool {
+		_ = conn.SetReadDeadline(time.Now().Add(readTimeout))
+		buf := make([]byte, 1)
+		n, err := conn.Read(buf)
+		return err == nil && n > 0
+	}
+
+	conn, err := common.GetConn("tcp4", address, timeout)
+	if err == nil && conn != nil {
+		if tryRead(conn) {
+			_ = conn.Close()
+			return true
+		}
+		_ = conn.Close()
+	}
+
+	for _, payload := range strictSocksProbePayloads {
+		conn, err = common.GetConn("tcp4", address, timeout)
+		if err != nil || conn == nil {
+			continue
+		}
+		_ = conn.SetWriteDeadline(time.Now().Add(readTimeout))
+		_, err = conn.Write(payload)
+		if err == nil && tryRead(conn) {
+			_ = conn.Close()
+			return true
+		}
+		_ = conn.Close()
+	}
+	return false
 }
 
 //func PortScanBatchTask(hostslist []string, ports string, timeout int64) []*PortScanRes {
@@ -413,7 +457,7 @@ func DoPortScan(ip string, port int, wg *sync.WaitGroup) {
 		case gonmap.Closed:
 			//fmt.Println("port ", port, "close")
 		case gonmap.Open:
-			if common.Socks5Proxy != "" {
+			if common.Socks5Proxy != "" && !hasStrictSocksResponse(host, port, common.NmapSingleProbeTimeout) {
 				return
 			}
 			isOpen = true
@@ -427,7 +471,7 @@ func DoPortScan(ip string, port int, wg *sync.WaitGroup) {
 			isOpen = true
 			protocol = response.FingerPrint.Service
 		case gonmap.Unknown:
-			if common.Socks5Proxy != "" {
+			if common.Socks5Proxy != "" && !hasStrictSocksResponse(host, port, common.NmapSingleProbeTimeout) {
 				return
 			}
 			isOpen = true
@@ -540,7 +584,7 @@ func PortProbeSingleOnStd(addr *Addr) {
 		case gonmap.Closed:
 			return
 		case gonmap.Open:
-			if common.Socks5Proxy != "" {
+			if common.Socks5Proxy != "" && !hasStrictSocksResponse(host, port, common.NmapSingleProbeTimeout) {
 				return
 			}
 		case gonmap.NotMatched:
@@ -549,7 +593,7 @@ func PortProbeSingleOnStd(addr *Addr) {
 				protocol = response.FingerPrint.Service
 			}
 		case gonmap.Unknown:
-			if common.Socks5Proxy != "" {
+			if common.Socks5Proxy != "" && !hasStrictSocksResponse(host, port, common.NmapSingleProbeTimeout) {
 				return
 			}
 		}
