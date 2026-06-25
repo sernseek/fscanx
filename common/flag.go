@@ -94,10 +94,16 @@ func Flag(Info *HostInfo) {
 	flag.StringVar(&AutoScanPorts, "ap", "80", "which port need to scan with autoscan task, default: 80")
 	flag.StringVar(&AUtoScanIPLocation, "ai", "1,2,253,254", "which location of a cnet need to scan, default: 1,2,253,254")
 	flag.IntVar(&AutoScanTcpTimeout, "atime", 3, "port scan timeout with auto scan task")
+	flag.StringVar(&AliveProbePorts, "alivep", "80,443,22,445", "tcp ports used for host alive probe before full scan")
 	flag.BoolVar(&IsParseDomain, "pd", false, "is parse domain to ip and add to port scan")
 	flag.BoolVar(&DomainPortBind, "dp", false, "for domain targets, bind all -p ports to generate http(s)://domain:port URLs")
 
 	flag.Parse()
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "np" {
+			NoPingExplicit = true
+		}
+	})
 
 	if ScanWithStdInput {
 		// 在-std模式下，http扫描的速率设置和端口扫描速率一样，使用-t参数控制，这样简单点

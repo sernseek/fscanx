@@ -303,26 +303,42 @@ func Scan(inputInfo common.HostInfo) {
 			fmt.Println("parse ip err:", err)
 			return
 		}
+		totalTargetCountCh := make(chan int, 1)
+		countedTargetInputCh := make(chan string, common.PortScanThreadNum)
+		go func() {
+			defer close(countedTargetInputCh)
+			totalTargetCount := 0
+			defer func() {
+				totalTargetCountCh <- totalTargetCount
+			}()
+			for host := range targetInputCh {
+				totalTargetCount++
+				countedTargetInputCh <- host
+			}
+		}()
+
 		aliveIPList := []string{}
 		aliveIpChan := make(chan string, common.PortScanThreadNum)
 		icmpWg := sync.WaitGroup{}
+		icmpWg.Add(1)
 		// 接收icmp探测结果到 []string
 		go func() {
-			icmpWg.Add(1)
+			defer icmpWg.Done()
 			for aliveIP := range aliveIpChan {
 				aliveIPList = append(aliveIPList, aliveIP)
 			}
-			icmpWg.Done()
 		}()
-		IcmpTaskWorkerByChan(targetInputCh, aliveIpChan, common.UsePingExe, isPrintIcmp) //阻塞
+		IcmpTaskWorkerByChan(countedTargetInputCh, aliveIpChan, common.UsePingExe, isPrintIcmp) //阻塞
 		icmpWg.Wait()
+		totalTargetCount := <-totalTargetCountCh
+		aliveIPList = supplementTcpAliveIfLowICMP(inputInfo.Host, totalTargetCount, aliveIPList)
 		if len(aliveIPList) == 0 {
 			goto ScanIpContainPort
 		}
 
-		common.LogSuccess("\n[*] 所有存活C段的icmp扫描结束，统计如下")
+		common.LogSuccess("\n[*] 存活探测结束，统计如下")
 		CountAliveIPCidrWithGlobal()
-		common.LogSuccess("[*] Icmp alive hosts len is: %d\n\n############################################\n[*] 端口扫描", len(aliveIPList))
+		common.LogSuccess("[*] Alive hosts len is: %d\n\n############################################\n[*] 端口扫描", len(aliveIPList))
 		if common.Scantype == "icmp" {
 			common.LogWG.Wait()
 			return
@@ -343,22 +359,54 @@ func Scan(inputInfo common.HostInfo) {
 			return
 		}
 	} else {
-		// 1.2 跳过icmp扫描，直接做端口探测和协议识别
-		//finalResChan := make(chan *PortScanRes, common.PortScanThreadNum)
-		//portscanWg := sync.WaitGroup{}
-		common.LogSuccess("[*] 端口扫描")
-
-		if common.NmapInitOK == false && common.UseNmap {
-			gonmap.SetFilter(9)
+		scannedByTcpAlive := false
+		if common.Socks5Proxy != "" && !common.NoPingExplicit && inputInfo.Host != "" {
+			targetInputCh, err := common.ParseIPsByChanMaster(inputInfo.Host, true)
+			if err != nil {
+				fmt.Println("parse ip err:", err)
+				return
+			}
+			aliveIPList := TcpAliveScanByChan(targetInputCh, common.PortsInput)
+			if len(aliveIPList) > 0 {
+				common.LogSuccess("\n[*] TCP存活探测结束，统计如下")
+				CountAliveIPCidrWithGlobal()
+				common.LogSuccess("[*] TCP alive hosts len is: %d\n\n############################################\n[*] 端口扫描", len(aliveIPList))
+				if common.Scantype == "icmp" {
+					common.LogWG.Wait()
+					return
+				}
+				if common.NmapInitOK == false && common.UseNmap {
+					gonmap.SetFilter(9)
+				}
+				PortScanBatchTaskWithList(aliveIPList, common.PortsInput)
+				common.LogWG.Wait()
+				scannedByTcpAlive = true
+				if common.Scantype == "portscan" {
+					return
+				}
+			} else {
+				common.LogSuccess("[*] TCP存活探测未发现主机，回退全量端口扫描")
+			}
 		}
 
-		targetInputCh, err := common.ParseIPsByChanMaster(inputInfo.Host, false)
-		if err != nil {
-			fmt.Println("parse ip err:", err)
-			return
-		}
+		if !scannedByTcpAlive {
+			// 1.2 跳过icmp扫描，直接做端口探测和协议识别
+			//finalResChan := make(chan *PortScanRes, common.PortScanThreadNum)
+			//portscanWg := sync.WaitGroup{}
+			common.LogSuccess("[*] 端口扫描")
 
-		PortScanBatchTaskWithChan(targetInputCh)
+			if common.NmapInitOK == false && common.UseNmap {
+				gonmap.SetFilter(9)
+			}
+
+			targetInputCh, err := common.ParseIPsByChanMaster(inputInfo.Host, false)
+			if err != nil {
+				fmt.Println("parse ip err:", err)
+				return
+			}
+
+			PortScanBatchTaskWithChan(targetInputCh)
+		}
 	}
 
 ScanIpContainPort:
@@ -417,6 +465,54 @@ ScanUrl:
 	fmt.Printf("\n[*] ok: 1/1\n")
 
 	return
+}
+
+func supplementTcpAliveIfLowICMP(hostInput string, totalTargets int, aliveIPList []string) []string {
+	if hostInput == "" || totalTargets == 0 || common.Scantype == "icmp" {
+		return aliveIPList
+	}
+
+	responseRate := float64(len(aliveIPList)) / float64(totalTargets)
+	if responseRate >= 0.1 {
+		return aliveIPList
+	}
+
+	common.LogSuccess("[*] ICMP响应率过低(%.1f%%)，启用TCP补充探测(%d个主机)", responseRate*100, totalTargets)
+	targetInputCh, err := common.ParseIPsByChanMaster(hostInput, true)
+	if err != nil {
+		fmt.Println("parse ip err:", err)
+		return aliveIPList
+	}
+
+	tcpAliveIPList := TcpAliveScanByChan(targetInputCh, common.PortsInput)
+	merged, added := mergeAliveIPLists(aliveIPList, tcpAliveIPList)
+	if added > 0 {
+		common.LogSuccess("[*] TCP补充探测发现 %d 个存活主机", added)
+	}
+	return merged
+}
+
+func mergeAliveIPLists(base []string, extra []string) ([]string, int) {
+	seen := make(map[string]struct{}, len(base)+len(extra))
+	merged := make([]string, 0, len(base)+len(extra))
+	for _, host := range base {
+		if _, ok := seen[host]; ok {
+			continue
+		}
+		seen[host] = struct{}{}
+		merged = append(merged, host)
+	}
+
+	added := 0
+	for _, host := range extra {
+		if _, ok := seen[host]; ok {
+			continue
+		}
+		seen[host] = struct{}{}
+		merged = append(merged, host)
+		added++
+	}
+	return merged, added
 }
 
 func CallScanTaskByPortAsync(scantype string, info *common.HostInfo, wg *sync.WaitGroup) {

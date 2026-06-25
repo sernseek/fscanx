@@ -190,7 +190,6 @@ func ParseInput(Info *HostInfo) {
 			fmt.Println("Socks5Proxy parse error:", err)
 			os.Exit(0)
 		}
-		NoPing = true
 	}
 	if Proxy != "" {
 		if Proxy == "1" {

@@ -108,6 +108,7 @@ var (
 	WebTimeout         int64
 	TmpSave            bool
 	NoPing             bool
+	NoPingExplicit     bool
 	UsePingExe         bool
 	Pocinfo            PocInfo
 	IsCheckPoc         bool
@@ -150,6 +151,7 @@ var (
 	AutoScanPorts      string
 	AUtoScanIPLocation string
 	AutoScanTcpTimeout int
+	AliveProbePorts    string
 	IsParseDomain      bool
 	DomainPortBind     bool
 )
