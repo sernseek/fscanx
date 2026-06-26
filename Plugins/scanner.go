@@ -270,12 +270,44 @@ func Scan(inputInfo common.HostInfo) {
 		// 如果输入是文件类型
 		var ipListFromFile []string
 		ipListFromFile, _ = common.ReadInputFile(common.HostFile)
+		ipGroupsFromFile := readHostFileIPGroups(common.HostFile)
+		if len(ipGroupsFromFile) == 0 && len(ipListFromFile) > 0 {
+			ipGroupsFromFile = append(ipGroupsFromFile, ipListFromFile)
+		}
+		common.LogSuccess("[*] 从文件读取目标: %s, 纯IP目标 %d 个, IP分组 %d 个, IP:Port目标 %d 个, URL目标 %d 个", common.HostFile, len(ipListFromFile), len(ipGroupsFromFile), len(common.HostAndPortList), len(common.Urls))
 		if common.NmapInitOK == false && common.UseNmap {
 			gonmap.SetFilter(9)
 		}
-		// 此处对纯ip目标做端口扫描
-		PortScanBatchTaskWithList(ipListFromFile, common.PortsInput)
-		common.LogWG.Wait()
+		for index, ipGroup := range ipGroupsFromFile {
+			if len(ipGroup) == 0 {
+				continue
+			}
+			common.LogSuccess("[*] 文件目标分组 %d/%d: %d 个IP", index+1, len(ipGroupsFromFile), len(ipGroup))
+			scanTargets := ipGroup
+			if common.NoPing == false {
+				scanTargets = filterAliveHostsFromList(ipGroup, isPrintIcmp)
+				if len(scanTargets) == 0 {
+					common.LogSuccess("[*] 当前分组未发现存活主机，跳过端口扫描")
+					continue
+				}
+				common.LogSuccess("[*] 当前分组存活主机数: %d\n\n############################################\n[*] 端口扫描", len(scanTargets))
+				if common.BloomFilter != nil {
+					common.BloomFilter.ClearAll()
+				}
+				if common.Scantype == "icmp" {
+					continue
+				}
+				runtime.GC()
+			}
+			// 此处对当前分组的纯ip目标做端口扫描
+			PortScanBatchTaskWithList(scanTargets, common.PortsInput)
+			common.LogWG.Wait()
+		}
+		if common.Scantype == "icmp" {
+			common.LogWG.Wait()
+			return
+		}
+		goto ScanIpContainPort
 	}
 
 	// 0.A段/B段 智能存活扫描
@@ -490,6 +522,82 @@ func supplementTcpAliveIfLowICMP(hostInput string, totalTargets int, aliveIPList
 		common.LogSuccess("[*] TCP补充探测发现 %d 个存活主机", added)
 	}
 	return merged
+}
+
+func filterAliveHostsFromList(hosts []string, isPrintIcmp bool) []string {
+	inputChan := hostsToChan(hosts)
+	aliveIPList := []string{}
+	aliveIpChan := make(chan string, common.PortScanThreadNum)
+	icmpWg := sync.WaitGroup{}
+	icmpWg.Add(1)
+	go func() {
+		defer icmpWg.Done()
+		for aliveIP := range aliveIpChan {
+			aliveIPList = append(aliveIPList, aliveIP)
+		}
+	}()
+	IcmpTaskWorkerByChan(inputChan, aliveIpChan, common.UsePingExe, isPrintIcmp)
+	icmpWg.Wait()
+	return supplementTcpAliveListIfLowICMP(hosts, aliveIPList)
+}
+
+func supplementTcpAliveListIfLowICMP(allHosts []string, aliveIPList []string) []string {
+	totalTargets := len(allHosts)
+	if totalTargets == 0 || common.Scantype == "icmp" {
+		return aliveIPList
+	}
+
+	responseRate := float64(len(aliveIPList)) / float64(totalTargets)
+	if responseRate >= 0.1 {
+		return aliveIPList
+	}
+
+	common.LogSuccess("[*] ICMP响应率过低(%.1f%%)，启用TCP补充探测(%d个主机)", responseRate*100, totalTargets)
+	tcpAliveIPList := TcpAliveScanByChan(hostsToChan(allHosts), common.PortsInput)
+	merged, added := mergeAliveIPLists(aliveIPList, tcpAliveIPList)
+	if added > 0 {
+		common.LogSuccess("[*] TCP补充探测发现 %d 个存活主机", added)
+	}
+	return merged
+}
+
+func hostsToChan(hosts []string) chan string {
+	ch := make(chan string, common.PortScanThreadNum)
+	go func() {
+		defer close(ch)
+		for _, host := range hosts {
+			host = strings.TrimSpace(host)
+			if host == "" {
+				continue
+			}
+			ch <- host
+		}
+	}()
+	return ch
+}
+
+func readHostFileIPGroups(filename string) [][]string {
+	file, err := os.Open(filename)
+	if err != nil {
+		return nil
+	}
+	defer file.Close()
+
+	var groups [][]string
+	scanner := bufio.NewScanner(file)
+	scanner.Split(bufio.ScanLines)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "http") || strings.Contains(line, ":") || common.Reg_domain.MatchString(line) {
+			continue
+		}
+		hosts := common.RemoveDuplicate(common.ParseIPList(line))
+		if len(hosts) == 0 {
+			continue
+		}
+		groups = append(groups, hosts)
+	}
+	return groups
 }
 
 func mergeAliveIPLists(base []string, extra []string) ([]string, int) {
